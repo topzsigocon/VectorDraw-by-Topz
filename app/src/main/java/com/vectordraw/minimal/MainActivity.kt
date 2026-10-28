@@ -5,22 +5,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.detectDragGestures
 import java.io.File
 
-// --- MODELS - PURE VECTOR, HINDI RASTER ---
-enum class ToolType { PICK, PEN, RECT, ELLIPSE }
-data class VectorObject(val id: Int, val type: ToolType, val x: Float, val y: Float, val w: Float, val h: Float, val fill: Color = Color(0xFF00E676))
+enum class ToolType { PICK, NODE, PEN, RECT, ELLIPSE }
+enum class FillType { SOLID, GRADIENT }
+data class Node(val x: Float, val y: Float, var hx1: Float=0f, var hy1: Float=0f, var hx2: Float=0f, var hy2: Float=0f)
+data class VectorObject(
+    val id: Int, val type: ToolType, var x: Float, var y: Float, var w: Float, var h: Float,
+    var fill: Color = Color(0xFF00E676), var fill2: Color = Color(0xFF121212),
+    var fillType: FillType = FillType.SOLID, var nodes: List<Node> = emptyList(),
+    var selectedNode: Int = -1
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,115 +34,109 @@ class MainActivity : ComponentActivity() {
         setContent {
             var selectedTool by remember { mutableStateOf(ToolType.PICK) }
             var objects by remember { mutableStateOf(listOf<VectorObject>()) }
-            var currentId by remember { mutableStateOf(0) }
+            var selectedId by remember { mutableStateOf(-1) }
             var docUnit by remember { mutableStateOf("inch") }
+            var fillType by remember { mutableStateOf(FillType.SOLID) }
+            var curId by remember { mutableStateOf(0) }
 
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Column(Modifier.fillMaxSize().background(Color(0xFF121212))) {
-                    // TOP PROPERTY BAR
-                    Row(Modifier.fillMaxWidth().background(Color(0xFF1E1E1E)).padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Doc: 10 x 8 $docUnit | Zoom: 100% | ${objects.size} objects", color = Color.White)
-                        Button(onClick = {
-                            // SAVE AS VECTOR JSON - HINDI RASTER
-                            val json = objects.joinToString(prefix="{\"unit\":\"$docUnit\",\"objects\":[", postfix="]}") { 
-                                "{\"type\":\"${it.type}\",\"x\":${it.x},\"y\":${it.y},\"w\":${it.w},\"h\":${it.h}}" 
+                    // TOP BAR
+                    Row(Modifier.fillMaxWidth().background(Color(0xFF1E1E1E)).padding(8.dp), Arrangement.SpaceBetween) {
+                        Text("VectorDraw by Topz | ${docUnit} | Sel: $selectedId", color=Color.White)
+                        Row {
+                            Button(onClick = { fillType = if(fillType==FillType.SOLID) FillType.GRADIENT else FillType.SOLID }) {
+                                Text(if(fillType==FillType.SOLID) "Solid" else "Gradient")
                             }
-                            val dir = File(getExternalFilesDir(null), "projects")
-                            dir.mkdirs()
-                            File(dir, "vectordraw_${System.currentTimeMillis()}.vdproj").writeText(json)
-                        }) { Text("Save .vdproj") }
+                            Spacer(Modifier.width(4.dp))
+                            Button(onClick = {
+                                val json = objects.joinToString(prefix="{\"unit\":\"$docUnit\",\"objects\":[", postfix="]}") {
+                                    "{\"id\":${it.id},\"type\":\"${it.type}\",\"x\":${it.x},\"y\":${it.y},\"w\":${it.w},\"h\":${it.h},\"fillType\":\"${it.fillType}\"}"
+                                }
+                                val dir = File(getExternalFilesDir(null), "projects"); dir.mkdirs()
+                                File(dir, "vd_topz_${System.currentTimeMillis()}.vdproj").writeText(json)
+                            }) { Text("Save") }
+                        }
                     }
-
                     Row(Modifier.fillMaxSize()) {
-                        // LEFT - MINIMALIST TOOL DOCK
-                        Column(Modifier.width(64.dp).fillMaxHeight().background(Color(0xFF1E1E1E)).padding(8.dp)) {
-                            ToolButton(ToolType.PICK, selectedTool) { selectedTool = it }
-                            ToolButton(ToolType.RECT, selectedTool) { selectedTool = it }
-                            ToolButton(ToolType.ELLIPSE, selectedTool) { selectedTool = it }
-                            ToolButton(ToolType.PEN, selectedTool) { selectedTool = it }
-                            Divider(Modifier.padding(vertical = 12.dp), color = Color.Gray)
-                            // Unit Switcher - Actual Size Feature
-                            listOf("inch","cm").forEach { u ->
-                                FilterChip(selected = docUnit==u, onClick = { docUnit=u }, label = { Text(u, color=Color.White) }, modifier = Modifier.padding(bottom=4.dp))
+                        // LEFT TOOLS - Minimalist
+                        Column(Modifier.width(64.dp).fillMaxHeight().background(Color(0xFF1E1E1E)).padding(6.dp)) {
+                            listOf(ToolType.PICK, ToolType.NODE, ToolType.RECT, ToolType.ELLIPSE, ToolType.PEN).forEach { t ->
+                                Button(onClick = { selectedTool = t },
+                                    colors = ButtonDefaults.buttonColors(containerColor = if(selectedTool==t) Color(0xFF00E676) else Color.Transparent),
+                                    modifier = Modifier.fillMaxWidth().height(44.dp).padding(bottom=6.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) { Text(t.name.take(1), color=Color.White) }
+                            }
+                            Divider(color=Color.Gray, modifier=Modifier.padding(vertical=8.dp))
+                            Text("Unit", color=Color.Gray); 
+                            listOf("inch","cm","mm").forEach { u ->
+                                FilterChip(selected=docUnit==u, onClick={docUnit=u}, label={Text(u, color=Color.White)})
                             }
                         }
-
-                        // CENTER - INFINITE CANVAS
-                        var startPos by remember { mutableStateOf(Offset.Zero) }
-                        Canvas(modifier = Modifier.fillMaxSize().background(Color(0xFF2A2A2A))
-                            .pointerInput(selectedTool) {
+                        // CANVAS WITH NODE EDITING
+                        var dragStart by remember { mutableStateOf(Offset.Zero) }
+                        Canvas(Modifier.fillMaxSize().background(Color(0xFF2A2A2A))
+                            .pointerInput(selectedTool, selectedId) {
                                 detectDragGestures(
-                                    onDragStart = { startPos = it },
+                                    onDragStart = { dragStart = it },
                                     onDragEnd = {
-                                        if(selectedTool == ToolType.RECT || selectedTool == ToolType.ELLIPSE) {
-                                            // wag gumawa pag sobrang liit
+                                        if(selectedTool==ToolType.NODE && selectedId!=-1) {
+                                            // node editing done
                                         }
                                     }
-                                ) { change, dragAmount ->
-                                    if (selectedTool == ToolType.RECT || selectedTool == ToolType.ELLIPSE) {
-                                        // preview lang, sa drag end natin finalize
-                                    }
-                                }
-                            }
-                            .pointerInput(selectedTool) {
-                                awaitPointerEventScope {
-                                    while(true) {
-                                        val event = awaitPointerEvent()
-                                        if(event.type == androidx.compose.ui.input.pointer.PointerEventType.Release) {
-                                            val end = event.changes.first().position
-                                            val w = end.x - startPos.x
-                                            val h = end.y - startPos.y
-                                            if (kotlin.math.abs(w) > 20 && kotlin.math.abs(h) > 20 && (selectedTool == ToolType.RECT || selectedTool == ToolType.ELLIPSE)) {
-                                                objects = objects + VectorObject(currentId++, selectedTool, startPos.x, startPos.y, w, h)
+                                ) { change, _ ->
+                                    if(selectedTool==ToolType.NODE && selectedId!=-1) {
+                                        // Move node or bezier handle
+                                        val idx = objects.indexOfFirst { it.id==selectedId }
+                                        if(idx!=-1) {
+                                            val obj = objects[idx]
+                                            if(obj.selectedNode!=-1) {
+                                                // move bezier handle
+                                                val newNodes = obj.nodes.toMutableList()
+                                                val n = newNodes[obj.selectedNode]
+                                                newNodes[obj.selectedNode] = n.copy(hx2 = change.position.x - n.x, hy2 = change.position.y - n.y)
+                                                objects = objects.toMutableList().also { it[idx] = obj.copy(nodes=newNodes) }
                                             }
                                         }
                                     }
                                 }
                             }
                         ) {
-                            // RULER LINES (simple)
-                            drawRect(Color(0xFF121212), topLeft = Offset(0f,0f), size = Size(size.width, 20f))
-                            drawRect(Color(0xFF121212), topLeft = Offset(0f,0f), size = Size(20f, size.height))
-                            
-                            // DRAW ALL VECTOR OBJECTS - HINDI RASTER
+                            // Rulers
+                            drawRect(Color(0xFF121212), size=Size(size.width, 18f))
+                            drawRect(Color(0xFF121212), size=Size(18f, size.height))
+
                             objects.forEach { obj ->
+                                val isSel = obj.id==selectedId
+                                val brush = if(obj.fillType==FillType.GRADIENT) Brush.linearGradient(listOf(obj.fill, obj.fill2)) else null
+                                
                                 when(obj.type) {
-                                    ToolType.RECT -> drawRect(color = obj.fill, topLeft = Offset(obj.x, obj.y), size = Size(obj.w, obj.h), style = Stroke(2f))
-                                    ToolType.ELLIPSE -> drawOval(color = obj.fill, topLeft = Offset(obj.x, obj.y), size = Size(obj.w, obj.h), style = Stroke(2f))
+                                    ToolType.RECT -> {
+                                        if(brush!=null) drawRect(brush=brush, topLeft=Offset(obj.x,obj.y), size=Size(obj.w,obj.h))
+                                        else drawRect(color=obj.fill, topLeft=Offset(obj.x,obj.y), size=Size(obj.w,obj.h), style=Stroke(if(isSel) 3f else 2f))
+                                        if(isSel && selectedTool==ToolType.NODE) {
+                                            // Draw nodes + bezier handles (Corel style)
+                                            obj.nodes.forEach { node ->
+                                                drawCircle(Color.White, radius=5f, center=Offset(node.x, node.y))
+                                                drawCircle(Color(0xFF00E676), radius=3f, center=Offset(node.x+node.hx2, node.y+node.hy2))
+                                                drawLine(Color.Gray, Offset(node.x,node.y), Offset(node.x+node.hx2, node.y+node.hy2), strokeWidth=1f)
+                                            }
+                                        }
+                                    }
+                                    ToolType.ELLIPSE -> {
+                                        if(brush!=null) drawOval(brush=brush, topLeft=Offset(obj.x,obj.y), size=Size(obj.w,obj.h))
+                                        else drawOval(color=obj.fill, topLeft=Offset(obj.x,obj.y), size=Size(obj.w,obj.h), style=Stroke(if(isSel) 3f else 2f))
+                                    }
                                     else -> {}
                                 }
+                                if(isSel) drawRect(Color.White, topLeft=Offset(obj.x-4,obj.y-4), size=Size(8f,8f)) // selection handle
                             }
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun ToolButton(type: ToolType, selected: ToolType, onSelect: (ToolType)->Unit) {
-    val isSelected = type == selected
-    Button(
-        onClick = { onSelect(type) },
-        colors = ButtonDefaults.buttonColors(containerColor = if(isSelected) Color(0xFF00E676) else Color.Transparent),
-        modifier = Modifier.fillMaxWidth().padding(bottom=8.dp).height(48.dp),
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Canvas(Modifier.size(24.dp)) {
-            // MINIMALIST LINE ICONS - 2px stroke, white lines
-            when(type) {
-                ToolType.PICK -> { // Arrow icon
-                    drawLine(Color.White, Offset(4f,4f), Offset(20f,12f), strokeWidth=2f)
-                    drawLine(Color.White, Offset(20f,12f), Offset(12f,12f), strokeWidth=2f)
-                    drawLine(Color.White, Offset(12f,12f), Offset(12f,20f), strokeWidth=2f)
-                }
-                ToolType.RECT -> drawRect(Color.White, style=Stroke(2f), size=Size(18f,18f), topLeft=Offset(3f,3f))
-                ToolType.ELLIPSE -> drawOval(Color.White, style=Stroke(2f), size=Size(18f,18f), topLeft=Offset(3f,3f))
-                ToolType.PEN -> { // Pen bezier
-                    drawLine(Color.White, Offset(4f,20f), Offset(12f,4f), strokeWidth=2f)
-                    drawLine(Color.White, Offset(12f,4f), Offset(20f,12f), strokeWidth=2f)
-                }
+                // Canvas tap to create
+                LaunchedEffect(selectedTool) {}
             }
         }
     }
