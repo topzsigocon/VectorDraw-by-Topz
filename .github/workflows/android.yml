@@ -12,8 +12,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
       - uses: gradle/actions/setup-gradle@v3
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: VectorDraw-by-Topz-APK
