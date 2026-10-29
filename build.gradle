@@ -1,8 +1,7 @@
-VectorDraw-by-Topz/
-├── app/
-│   └── build.gradle
-├── build.gradle  <- WALA ITO SA REPO MO NGAYON
-├── settings.gradle <- WALA RIN ITO
-├── gradlew
-├── gradlew.bat
-└── .github/workflows/android.yml
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.2.2' }
+}
+allprojects {
+    repositories { google(); mavenCentral() }
+}
