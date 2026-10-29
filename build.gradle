@@ -1,0 +1,8 @@
+VectorDraw-by-Topz/
+├── app/
+│   └── build.gradle
+├── build.gradle  <- WALA ITO SA REPO MO NGAYON
+├── settings.gradle <- WALA RIN ITO
+├── gradlew
+├── gradlew.bat
+└── .github/workflows/android.yml
